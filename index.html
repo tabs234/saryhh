@@ -98,9 +98,7 @@
 
     async function init() {
       try {
-        // Keep this so signed-in users still get their real account tied to
-        // the delete request, but never gate the UI on it.
-        try { await initializeAccount(); } catch { /* no-op */ }
+        await initializeAccount();
         await window.HHDevice?.ready;
 
         const games = getGames();
@@ -119,6 +117,11 @@
         select.disabled = false;
         deleteButton.disabled = false;
         updateSelectedGame();
+
+        if (!account?.id) {
+          setStatus('Sign in to delete saved game data.', true);
+          deleteButton.disabled = true;
+        }
       } catch (error) {
         select.replaceChildren(new Option('Could not load games', ''));
         setStatus(`Could not initialize the account or game list: ${error?.message || error}`, true);
@@ -133,17 +136,16 @@
     select.addEventListener('change', updateSelectedGame);
 
     deleteButton.addEventListener('click', async () => {
-      if (!selectedGame || deleteButton.disabled) return;
+      if (!selectedGame || !account?.id || deleteButton.disabled) return;
       const gameAtStart = selectedGame;
-      // Best-effort owner id. If nobody is signed in this is null — whether
-      // clearGameData accepts that depends on its implementation.
-      const ownerId = account?.id ?? null;
+      const ownerId = account.id;
       deleteButton.disabled = true;
       setStatus('');
 
       try {
+        // Uses the project's existing five-second confirmation dialog.
         if (!await confirmGameDeletion(gameAtStart)) return;
-        if ((account?.id ?? null) !== ownerId) {
+        if (account?.id !== ownerId) {
           setStatus('Your account changed during confirmation. Please select the game again.', true);
           return;
         }
@@ -152,10 +154,12 @@
       } catch (error) {
         setStatus(`Could not delete game data: ${error?.message || error}`, true);
       } finally {
-        deleteButton.disabled = false;
+        deleteButton.disabled = !account?.id;
       }
     });
 
+    // Keep dialog controls available if the imported project's confirmation
+    // function is replaced with a local implementation later.
     cancelButton.addEventListener('click', () => dialog.close());
     confirmButton.addEventListener('click', () => dialog.close());
 
