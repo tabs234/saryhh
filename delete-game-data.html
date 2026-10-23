@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>Delete Game Data</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0a0a0a;--panel:#121212;--line:#2c2c2c;--text:#f5f5f5;--muted:#aaa;--pink:#ff2d8a;--red:#ff426d}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}
+    main{width:min(620px,100%)}
+    .eyebrow{color:var(--pink);font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;margin:0 0 8px}
+    h1{font-size:clamp(28px,5vw,38px);line-height:1.15;letter-spacing:-.04em;margin:0 0 12px}
+    .intro{color:var(--muted);margin:0 0 26px}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px}
+    label{display:block;font-size:13px;font-weight:700;color:#d5d5d5;margin-bottom:8px}
+    select{width:100%;padding:13px 14px;background:#0b0b0b;border:1px solid #414141;border-radius:8px;color:var(--text);font:inherit}
+    select:focus-visible,button:focus-visible{outline:2px solid var(--pink);outline-offset:3px}
+    .warning{margin:18px 0 0;padding:14px 15px;border:1px solid #59303b;border-radius:9px;background:#211015;color:#e6cbd2;font-size:14px}
+    .warning strong{color:#ff8aa7}
+    .preserved{margin:15px 0 0;color:var(--muted);font-size:13px}
+    .preserved strong{color:#eee}
+    button{font:inherit;font-weight:750;border-radius:8px;padding:13px 16px;cursor:pointer}
+    .delete{width:100%;margin-top:22px;border:1px solid var(--red);background:var(--red);color:#16060b}
+    .delete:hover{filter:brightness(1.08)}
+    .delete:disabled{opacity:.55;cursor:wait}
+    .status{margin-top:16px;font-size:14px;color:#ccc;overflow-wrap:anywhere}
+    .status.error{color:#ff8aa7}
+    .status:empty{display:none}
+    dialog{width:min(500px,calc(100% - 28px));padding:24px;background:#141414;color:var(--text);border:1px solid #444;border-radius:13px}
+    dialog::backdrop{background:#000c;backdrop-filter:blur(3px)}
+    dialog h2{font-size:24px;margin:0 0 12px}
+    dialog p{color:#d0d0d0}
+    .countdown{font-size:14px;color:var(--pink);min-height:24px}
+    .actions{display:flex;gap:10px;margin-top:20px}
+    .actions button{flex:1}
+    .cancel{background:#242424;color:#eee;border:1px solid #454545}
+    .confirm{background:var(--red);color:#16060b;border:1px solid var(--red)}
+    button:disabled{opacity:.45;cursor:not-allowed}
+    .foot{font-size:12px;color:#777;margin-top:18px;text-align:center}
+    @media(max-width:480px){body{padding:16px}.card{padding:18px}.actions{flex-direction:column-reverse}}
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Account settings</p>
+    <h1>Delete Game Data</h1>
+    <p class="intro">Choose a game to erase its saved progress from your account.</p>
+
+    <section class="card" aria-labelledby="selectionTitle">
+      <label id="selectionTitle" for="gameSelect">Select a game</label>
+      <select id="gameSelect" disabled>
+        <option>Loading games…</option>
+      </select>
+
+      <p class="warning"><strong>Warning:</strong> This deletes saved progress, upgrades, unlocks and game preferences for the selected game from your account on every computer. This cannot be undone.</p>
+      <p class="preserved"><strong>High scores and Records page scores stay.</strong></p>
+
+      <button class="delete" id="deleteButton" type="button" disabled>Delete game data</button>
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+    </section>
+    <p class="foot">Only the selected game's saved data is targeted.</p>
+  </main>
+
+  <dialog id="confirmDialog" aria-labelledby="dialogTitle" aria-describedby="dialogWarning">
+    <h2 id="dialogTitle">Are you sure?</h2>
+    <p id="dialogWarning">This action cannot be undone.</p>
+    <p class="countdown" id="countdown" role="status" aria-live="polite">Read the warning before continuing.</p>
+    <div class="actions">
+      <button class="cancel" id="cancelButton" type="button" disabled>Cancel</button>
+      <button class="confirm" id="confirmButton" type="button" disabled>Delete game data</button>
+    </div>
+  </dialog>
+
+  <script type="module">
+    import { clearGameData, confirmGameDeletion } from './delete-game.js?v=20261013-account-saves-1';
+    import { playable } from './catalog.js?v=20261022-tunes-covers-1';
+    import { account, initializeAccount } from './auth.js?v=20261013-account-saves-1';
+
+    const $ = id => document.getElementById(id);
+    const select = $('gameSelect');
+    const deleteButton = $('deleteButton');
+    const status = $('status');
+    const dialog = $('confirmDialog');
+    const cancelButton = $('cancelButton');
+    const confirmButton = $('confirmButton');
+    let selectedGame = null;
+
+    function setStatus(message, error = false) {
+      status.textContent = message;
+      status.classList.toggle('error', error);
+    }
+
+    function getGames() {
+      return playable.filter(game => game.key || ['project-frontline', 'open-trails'].includes(game.id));
+    }
+
+    async function init() {
+      try {
+        await initializeAccount();
+        await window.HHDevice?.ready;
+
+        const games = getGames();
+        select.replaceChildren();
+
+        if (!games.length) {
+          select.add(new Option('No eligible games found', ''));
+          setStatus('No games available for save deletion.', true);
+          return;
+        }
+
+        for (const game of games) {
+          select.add(new Option(game.title, game.key || game.id));
+        }
+
+        select.disabled = false;
+        deleteButton.disabled = false;
+        updateSelectedGame();
+
+        if (!account?.id) {
+          setStatus('Sign in to delete saved game data.', true);
+          deleteButton.disabled = true;
+        }
+      } catch (error) {
+        select.replaceChildren(new Option('Could not load games', ''));
+        setStatus(`Could not initialize the account or game list: ${error?.message || error}`, true);
+      }
+    }
+
+    function updateSelectedGame() {
+      selectedGame = getGames().find(game => (game.key || game.id) === select.value) || null;
+      setStatus('');
+    }
+
+    select.addEventListener('change', updateSelectedGame);
+
+    deleteButton.addEventListener('click', async () => {
+      if (!selectedGame || !account?.id || deleteButton.disabled) return;
+      const gameAtStart = selectedGame;
+      const ownerId = account.id;
+      deleteButton.disabled = true;
+      setStatus('');
+
+      try {
+        // Uses the project's existing five-second confirmation dialog.
+        if (!await confirmGameDeletion(gameAtStart)) return;
+        if (account?.id !== ownerId) {
+          setStatus('Your account changed during confirmation. Please select the game again.', true);
+          return;
+        }
+        await clearGameData(gameAtStart, ownerId);
+        setStatus(`${gameAtStart.title} saved data was deleted. High scores and Records page scores stay.`);
+      } catch (error) {
+        setStatus(`Could not delete game data: ${error?.message || error}`, true);
+      } finally {
+        deleteButton.disabled = !account?.id;
+      }
+    });
+
+    // Keep dialog controls available if the imported project's confirmation
+    // function is replaced with a local implementation later.
+    cancelButton.addEventListener('click', () => dialog.close());
+    confirmButton.addEventListener('click', () => dialog.close());
+
+    await init();
+  </script>
+</body>
+</html>
